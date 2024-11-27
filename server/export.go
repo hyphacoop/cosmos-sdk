@@ -1,17 +1,15 @@
 package server
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 
+	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/spf13/cobra"
 
 	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/server/types"
-	"github.com/cosmos/cosmos-sdk/version"
 	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
 )
 
@@ -78,38 +76,50 @@ func ExportCmd(appExporter types.AppExporter, defaultNodeHome string) *cobra.Com
 			modulesToExport, _ := cmd.Flags().GetStringSlice(FlagModulesToExport)
 			outputDocument, _ := cmd.Flags().GetString(flags.FlagOutputDocument)
 
-			exported, err := appExporter(serverCtx.Logger, db, traceWriter, height, forZeroHeight, jailAllowedAddrs, serverCtx.Viper, modulesToExport)
+			writer := cmd.OutOrStdout()
+			if outputDocument != "" {
+				file, err := os.Create(outputDocument)
+				if err != nil {
+					return err
+				}
+				defer file.Close()
+				writer = file
+			}
+			jw := jwriter.NewStreamingWriter(writer, 30*1024)
+			defer jw.Flush()
+
+			_, err = appExporter(serverCtx.Logger, db, traceWriter, &jw, height, forZeroHeight, jailAllowedAddrs, serverCtx.Viper, modulesToExport)
 			if err != nil {
 				return fmt.Errorf("error exporting state: %w", err)
 			}
 
-			appGenesis, err := genutiltypes.AppGenesisFromFile(serverCtx.Config.GenesisFile())
+			_, err = genutiltypes.AppGenesisFromFile(serverCtx.Config.GenesisFile())
 			if err != nil {
 				return err
 			}
 
-			// set current binary version
-			appGenesis.AppName = version.AppName
-			appGenesis.AppVersion = version.Version
+			// // set current binary version
+			// appGenesis.AppName = version.AppName
+			// appGenesis.AppVersion = version.Version
 
-			appGenesis.AppState = exported.AppState
-			appGenesis.InitialHeight = exported.Height
-			appGenesis.Consensus = genutiltypes.NewConsensusGenesis(exported.ConsensusParams, exported.Validators)
+			// // appGenesis.AppState = exported.AppState
+			// appGenesis.InitialHeight = exported.Height
+			// appGenesis.Consensus = genutiltypes.NewConsensusGenesis(exported.ConsensusParams, exported.Validators)
 
-			out, err := json.Marshal(appGenesis)
-			if err != nil {
-				return err
-			}
+			// out, err := json.Marshal(appGenesis)
+			// if err != nil {
+			// 	return err
+			// }
 
-			if outputDocument == "" {
-				// Copy the entire genesis file to stdout.
-				_, err := io.Copy(cmd.OutOrStdout(), bytes.NewReader(out))
-				return err
-			}
+			// if outputDocument == "" {
+			// 	// Copy the entire genesis file to stdout.
+			// 	_, err := io.Copy(cmd.OutOrStdout(), bytes.NewReader(out))
+			// 	return err
+			// }
 
-			if err = appGenesis.SaveAs(outputDocument); err != nil {
-				return err
-			}
+			// if err = appGenesis.SaveAs(outputDocument); err != nil {
+			// 	return err
+			// }
 
 			return nil
 		},

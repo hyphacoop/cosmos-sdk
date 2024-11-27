@@ -1,13 +1,13 @@
 package types
 
 import (
-	"encoding/json"
 	"io"
 
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	cmttypes "github.com/cometbft/cometbft/types"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/gogoproto/grpc"
+	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/spf13/cobra"
 
 	"cosmossdk.io/log"
@@ -74,8 +74,6 @@ type (
 	// ExportedApp represents an exported app state, along with
 	// validators, consensus params and latest app height.
 	ExportedApp struct {
-		// AppState is the application state as JSON.
-		AppState json.RawMessage
 		// Validators is the exported validator set.
 		Validators []cmttypes.GenesisValidator
 		// Height is the app's latest block height.
@@ -90,6 +88,7 @@ type (
 		logger log.Logger,
 		db dbm.DB,
 		traceWriter io.Writer,
+		genesisWriter *jwriter.Writer,
 		height int64,
 		forZeroHeight bool,
 		jailAllowedAddrs []string,

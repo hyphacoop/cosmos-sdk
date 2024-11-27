@@ -41,6 +41,7 @@ require (
 	github.com/huandu/skiplist v1.2.0
 	github.com/improbable-eng/grpc-web v0.15.0
 	github.com/jhump/protoreflect v1.15.3
+	github.com/launchdarkly/go-jsonstream/v3 v3.1.0
 	github.com/magiconair/properties v1.8.7
 	github.com/manifoldco/promptui v0.9.0
 	github.com/mattn/go-isatty v0.0.20
@@ -123,6 +124,7 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lib/pq v1.10.7 // indirect
 	github.com/linxGnu/grocksdb v1.8.14 // indirect
+	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/minio/highwayhash v1.0.2 // indirect
 	github.com/mitchellh/go-testing-interface v1.14.1 // indirect

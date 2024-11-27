@@ -36,8 +36,10 @@ import (
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 	"github.com/spf13/cobra"
 	"golang.org/x/exp/maps"
+	"golang.org/x/sync/errgroup"
 
 	"cosmossdk.io/core/appmodule"
 	"cosmossdk.io/core/genesis"
@@ -529,74 +531,98 @@ func (m *Manager) InitGenesis(ctx sdk.Context, cdc codec.JSONCodec, genesisData 
 }
 
 // ExportGenesis performs export genesis functionality for modules
-func (m *Manager) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec) (map[string]json.RawMessage, error) {
-	return m.ExportGenesisForModules(ctx, cdc, []string{})
+func (m *Manager) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec, appStateWriter *jwriter.Writer) error {
+	return m.ExportGenesisForModules(ctx, cdc, []string{}, appStateWriter)
 }
 
 // ExportGenesisForModules performs export genesis functionality for modules
-func (m *Manager) ExportGenesisForModules(ctx sdk.Context, cdc codec.JSONCodec, modulesToExport []string) (map[string]json.RawMessage, error) {
+func (m *Manager) ExportGenesisForModules(ctx sdk.Context, cdc codec.JSONCodec, modulesToExport []string, appStateWriter *jwriter.Writer) error {
 	if len(modulesToExport) == 0 {
 		modulesToExport = m.OrderExportGenesis
 	}
 	// verify modules exists in app, so that we don't panic in the middle of an export
 	if err := m.checkModulesExists(modulesToExport); err != nil {
-		return nil, err
+		return err
 	}
 
 	type genesisResult struct {
-		bz  json.RawMessage
-		err error
+		bz         json.RawMessage
+		moduleName string
 	}
 
-	channels := make(map[string]chan genesisResult)
-	for _, moduleName := range modulesToExport {
-		mod := m.Modules[moduleName]
-		if module, ok := mod.(appmodule.HasGenesis); ok {
-			// core API genesis
-			channels[moduleName] = make(chan genesisResult)
-			go func(module appmodule.HasGenesis, ch chan genesisResult) {
-				ctx := ctx.WithGasMeter(storetypes.NewInfiniteGasMeter()) // avoid race conditions
-				target := genesis.RawJSONTarget{}
-				err := module.ExportGenesis(ctx, target.Target())
-				if err != nil {
-					ch <- genesisResult{nil, err}
-					return
-				}
+	// We need limits so as to not run out of memory by writing this.
+	const concurrency = 2
+	ch := make(chan genesisResult, concurrency)
 
-				rawJSON, err := target.JSON()
-				if err != nil {
-					ch <- genesisResult{nil, err}
-					return
-				}
+	eg, gCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(concurrency)
+	doneAdding := make(chan struct{})
 
-				ch <- genesisResult{rawJSON, nil}
-			}(module, channels[moduleName])
-		} else if module, ok := mod.(HasGenesis); ok {
-			channels[moduleName] = make(chan genesisResult)
-			go func(module HasGenesis, ch chan genesisResult) {
-				ctx := ctx.WithGasMeter(storetypes.NewInfiniteGasMeter()) // avoid race conditions
-				ch <- genesisResult{module.ExportGenesis(ctx, cdc), nil}
-			}(module, channels[moduleName])
-		} else if module, ok := mod.(HasABCIGenesis); ok {
-			channels[moduleName] = make(chan genesisResult)
-			go func(module HasABCIGenesis, ch chan genesisResult) {
-				ctx := ctx.WithGasMeter(storetypes.NewInfiniteGasMeter()) // avoid race conditions
-				ch <- genesisResult{module.ExportGenesis(ctx, cdc), nil}
-			}(module, channels[moduleName])
+	// eg.Go will block until there's an available goroutine, so let's do these in the background
+	go func() {
+		defer close(doneAdding)
+		for _, moduleName := range modulesToExport {
+			mod := m.Modules[moduleName]
+			moduleName := moduleName
+			if module, ok := mod.(appmodule.HasGenesis); ok {
+				eg.Go(func() error {
+					ctx := ctx.WithGasMeter(storetypes.NewInfiniteGasMeter()) // avoid race conditions
+					target := genesis.RawJSONTarget{}
+					err := module.ExportGenesis(ctx, target.Target())
+					if err != nil {
+						return err
+					}
+
+					rawJSON, err := target.JSON()
+					if err != nil {
+						return err
+					}
+
+					ch <- genesisResult{rawJSON, moduleName}
+					return nil
+				})
+			} else if module, ok := mod.(HasGenesis); ok {
+				eg.Go(func() error {
+					ctx := ctx.WithGasMeter(storetypes.NewInfiniteGasMeter()) // avoid race conditions
+					ch <- genesisResult{module.ExportGenesis(ctx, cdc), moduleName}
+					return nil
+				})
+			} else if module, ok := mod.(HasABCIGenesis); ok {
+				eg.Go(func() error {
+					ctx := ctx.WithGasMeter(storetypes.NewInfiniteGasMeter()) // avoid race conditions
+					ch <- genesisResult{module.ExportGenesis(ctx, cdc), moduleName}
+					return nil
+				})
+			}
+		}
+	}()
+
+	errCh := make(chan error)
+	go func() {
+		select {
+		case <-doneAdding:
+		case <-gCtx.Done():
+		}
+		errCh <- eg.Wait()
+	}()
+	appState := appStateWriter.Object()
+	for {
+		select {
+		case res, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			(&appState).Name(res.moduleName).Raw(res.bz)
+			if err := appStateWriter.Flush(); err != nil {
+				return err
+			}
+		case err := <-errCh:
+			close(ch)
+			if err != nil {
+				return err
+			}
 		}
 	}
-
-	genesisData := make(map[string]json.RawMessage)
-	for moduleName := range channels {
-		res := <-channels[moduleName]
-		if res.err != nil {
-			return nil, fmt.Errorf("genesis export error in %s: %w", moduleName, res.err)
-		}
-
-		genesisData[moduleName] = res.bz
-	}
-
-	return genesisData, nil
 }
 
 // checkModulesExists verifies that all modules in the list exist in the app

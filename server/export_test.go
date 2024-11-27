@@ -100,8 +100,7 @@ func (s *ExportSystem) MustRun(t *testing.T, args ...string) cmdtest.RunResult {
 //
 // This is for the mockExporter to check if a return value was ever set.
 func isZeroExportedApp(a types.ExportedApp) bool {
-	return a.AppState == nil &&
-		len(a.Validators) == 0 &&
+	return len(a.Validators) == 0 &&
 		a.Height == 0 &&
 		a.ConsensusParams == cmtproto.ConsensusParams{}
 }
@@ -155,6 +154,7 @@ func (e *mockExporter) Export(
 	logger log.Logger,
 	db dbm.DB,
 	traceWriter io.Writer,
+	appStateDst io.Writer,
 	height int64,
 	forZeroHeight bool,
 	jailAllowedAddrs []string,

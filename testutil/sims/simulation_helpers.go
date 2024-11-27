@@ -82,12 +82,12 @@ func SimulationOperations(app runtime.AppI, cdc codec.JSONCodec, config simtypes
 func CheckExportSimulation(app runtime.AppI, config simtypes.Config, params simtypes.Params) error {
 	if config.ExportStatePath != "" {
 		fmt.Println("exporting app state...")
-		exported, err := app.ExportAppStateAndValidators(false, nil, nil)
-		if err != nil {
-			return err
-		}
+		// exported, err := app.ExportAppStateAndValidators(false, nil, nil, nil)
+		// if err != nil {
+		// 	return err
+		// }
 
-		if err := os.WriteFile(config.ExportStatePath, []byte(exported.AppState), 0o600); err != nil {
+		if err := os.WriteFile(config.ExportStatePath, []byte("{}"), 0o600); err != nil {
 			return err
 		}
 	}

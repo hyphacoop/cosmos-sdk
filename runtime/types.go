@@ -2,6 +2,7 @@ package runtime
 
 import (
 	abci "github.com/cometbft/cometbft/abci/types"
+	"github.com/launchdarkly/go-jsonstream/v3/jwriter"
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	"github.com/cosmos/cosmos-sdk/server/types"
@@ -34,7 +35,7 @@ type AppI interface {
 	LoadHeight(height int64) error
 
 	// Exports the state of the application for a genesis file.
-	ExportAppStateAndValidators(forZeroHeight bool, jailAllowedAddrs, modulesToExport []string) (types.ExportedApp, error)
+	ExportAppStateAndValidators(forZeroHeight bool, jailAllowedAddrs, modulesToExport []string, genesisWriter *jwriter.Writer) (types.ExportedApp, error)
 
 	// Helper for the simulation framework.
 	SimulationManager() *module.SimulationManager
