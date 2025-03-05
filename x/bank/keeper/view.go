@@ -60,6 +60,8 @@ type BaseViewKeeper struct {
 	storeService store.KVStoreService
 	ak           types.AccountKeeper
 	logger       log.Logger
+	// fastCoinPool is a pool of FastCoin objects that can be reused to avoid allocations in hot paths.
+	fastCoinPool *sdk.FastCoinPool
 
 	Schema        collections.Schema
 	Supply        collections.Map[string, math.Int]
@@ -82,6 +84,7 @@ func NewBaseViewKeeper(cdc codec.BinaryCodec, storeService store.KVStoreService,
 		SendEnabled:   collections.NewMap(sb, types.SendEnabledPrefix, "send_enabled", collections.StringKey, codec.BoolValue), // NOTE: we use a bool value which uses protobuf to retain state backwards compat
 		Balances:      collections.NewIndexedMap(sb, types.BalancesPrefix, "balances", collections.PairKeyCodec(sdk.AccAddressKey, collections.StringKey), types.BalanceValueCodec, newBalancesIndexes(sb)),
 		Params:        collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
+		fastCoinPool:  sdk.NewFastCoinPool(),
 	}
 
 	schema, err := sb.Build()
@@ -147,6 +150,17 @@ func (k BaseViewKeeper) GetBalance(ctx context.Context, addr sdk.AccAddress, den
 		return sdk.NewCoin(denom, math.ZeroInt())
 	}
 	return sdk.NewCoin(denom, amt)
+}
+
+// FastGetBalance returns the balance of a specific denomination for a given account
+// by address. Will return a FastCoin to prevent allocations. Use this in hot paths,
+// such as SendFunds, or ante handlers.
+func (k BaseViewKeeper) FastGetBalance(ctx context.Context, addr sdk.AccAddress, denom string) *sdk.FastCoin {
+	amt, err := k.Balances.Get(ctx, collections.Join(addr, denom))
+	if err != nil {
+		return k.fastCoinPool.Get(denom, math.ZeroInt())
+	}
+	return k.fastCoinPool.Get(denom, amt)
 }
 
 // IterateAccountBalances iterates over the balances of a single account and

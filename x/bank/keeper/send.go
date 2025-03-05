@@ -8,7 +8,6 @@ import (
 	"cosmossdk.io/core/store"
 	errorsmod "cosmossdk.io/errors"
 	"cosmossdk.io/log"
-	"cosmossdk.io/math"
 
 	"github.com/cosmos/cosmos-sdk/codec"
 	"github.com/cosmos/cosmos-sdk/telemetry"
@@ -263,27 +262,30 @@ func (k BaseSendKeeper) subUnlockedCoins(ctx context.Context, addr sdk.AccAddres
 	lockedCoins := k.LockedCoins(ctx, addr)
 
 	for _, coin := range amt {
-		balance := k.GetBalance(ctx, addr, coin.Denom)
-		locked := sdk.NewCoin(coin.Denom, lockedCoins.AmountOf(coin.Denom))
+		balance := k.FastGetBalance(ctx, addr, coin.Denom)
+		defer balance.Release()
+		locked := k.fastCoinPool.Get(coin.Denom, lockedCoins.AmountOf(coin.Denom))
+		defer locked.Release()
 
-		spendable, hasNeg := sdk.Coins{balance}.SafeSub(locked)
+		spendable, hasNeg := balance.SafeSub(locked)
 		if hasNeg {
 			return errorsmod.Wrapf(sdkerrors.ErrInsufficientFunds,
 				"locked amount exceeds account balance funds: %s > %s", locked, balance)
 		}
+		defer spendable.Release()
 
-		if _, hasNeg := spendable.SafeSub(coin); hasNeg {
-			if len(spendable) == 0 {
-				spendable = sdk.Coins{sdk.NewCoin(coin.Denom, math.ZeroInt())}
-			}
+		if _check, hasNeg := spendable.SafeSubCoin(&coin); hasNeg {
 			return errorsmod.Wrapf(
 				sdkerrors.ErrInsufficientFunds,
 				"spendable balance %s is smaller than %s",
 				spendable, coin,
 			)
+		} else {
+			_check.Release()
 		}
 
-		newBalance := balance.Sub(coin)
+		newBalance := balance.SubCoin(&coin)
+		defer newBalance.Release()
 
 		if err := k.setBalance(ctx, addr, newBalance); err != nil {
 			return err
@@ -306,8 +308,9 @@ func (k BaseSendKeeper) addCoins(ctx context.Context, addr sdk.AccAddress, amt s
 	}
 
 	for _, coin := range amt {
-		balance := k.GetBalance(ctx, addr, coin.Denom)
-		newBalance := balance.Add(coin)
+		balance := k.FastGetBalance(ctx, addr, coin.Denom)
+		defer balance.Release()
+		newBalance := balance.AddCoin(&coin)
 
 		err := k.setBalance(ctx, addr, newBalance)
 		if err != nil {
@@ -325,7 +328,7 @@ func (k BaseSendKeeper) addCoins(ctx context.Context, addr sdk.AccAddress, amt s
 }
 
 // setBalance sets the coin balance for an account by address.
-func (k BaseSendKeeper) setBalance(ctx context.Context, addr sdk.AccAddress, balance sdk.Coin) error {
+func (k BaseSendKeeper) setBalance(ctx context.Context, addr sdk.AccAddress, balance *sdk.FastCoin) error {
 	if !balance.IsValid() {
 		return errorsmod.Wrap(sdkerrors.ErrInvalidCoins, balance.String())
 	}

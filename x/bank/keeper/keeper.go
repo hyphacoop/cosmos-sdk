@@ -142,7 +142,11 @@ func (k BaseKeeper) DelegateCoins(ctx context.Context, delegatorAddr, moduleAccA
 		}
 
 		balances = balances.Add(balance)
-		err := k.setBalance(ctx, delegatorAddr, balance.Sub(coin))
+		// TODO(violet): fix this entire method to use fastcoins
+		resultingBalance := balance.Sub(coin)
+		resultingBalanceFast := k.fastCoinPool.Get(resultingBalance.Denom, resultingBalance.Amount)
+		defer resultingBalanceFast.Release()
+		err := k.setBalance(ctx, delegatorAddr, resultingBalanceFast)
 		if err != nil {
 			return err
 		}
