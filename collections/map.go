@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 
 	"cosmossdk.io/collections/codec"
 	"cosmossdk.io/core/store"
@@ -17,9 +18,10 @@ type Map[K, V any] struct {
 	vc codec.ValueCodec[V]
 
 	// store accessor
-	sa     func(context.Context) store.KVStore
-	prefix []byte
-	name   string
+	sa             func(context.Context) store.KVStore
+	prefix         []byte
+	name           string
+	encodedKeyPool *sync.Pool
 }
 
 // NewMap returns a Map given a StoreKey, a Prefix, human-readable name and the relative value and key encoders.
@@ -38,6 +40,11 @@ func NewMap[K, V any](
 		sa:     schemaBuilder.schema.storeAccessor,
 		prefix: prefix.Bytes(),
 		name:   name,
+		encodedKeyPool: &sync.Pool{
+			New: func() any {
+				return make([]byte, 0, len(prefix.Bytes())+255)
+			},
+		},
 	}
 	schemaBuilder.addCollection(collectionImpl[K, V]{m})
 	return m
@@ -49,6 +56,19 @@ func (m Map[K, V]) GetName() string {
 
 func (m Map[K, V]) GetPrefix() []byte {
 	return m.prefix
+}
+
+func (m Map[K, V]) getEncodedKeyBuffer(prefix []byte, key K) []byte {
+	buf := m.encodedKeyPool.Get().([]byte)
+	requiredSize := len(prefix) + m.kc.Size(key)
+	if cap(buf) < requiredSize {
+		// If the buffer is too small, allocate a new one with proper length
+		buf = make([]byte, requiredSize)
+	} else {
+		// Reuse buffer but ensure it has proper length
+		buf = buf[:requiredSize]
+	}
+	return buf
 }
 
 // Set maps the provided value to the provided key in the store.
@@ -72,7 +92,9 @@ func (m Map[K, V]) Set(ctx context.Context, key K, value V) error {
 // errors with ErrNotFound if the key does not exist, or
 // with ErrEncoding if the key or value decoding fails.
 func (m Map[K, V]) Get(ctx context.Context, key K) (v V, err error) {
-	bytesKey, err := EncodeKeyWithPrefix(m.prefix, m.kc, key)
+	bytesKey := m.getEncodedKeyBuffer(m.prefix, key)
+	defer m.encodedKeyPool.Put(bytesKey)
+	err = EncodeKeyWithPrefixInto(m.prefix, m.kc, key, bytesKey)
 	if err != nil {
 		return v, err
 	}
@@ -96,7 +118,9 @@ func (m Map[K, V]) Get(ctx context.Context, key K) (v V, err error) {
 // Has reports whether the key is present in storage or not.
 // Errors with ErrEncoding if key encoding fails.
 func (m Map[K, V]) Has(ctx context.Context, key K) (bool, error) {
-	bytesKey, err := EncodeKeyWithPrefix(m.prefix, m.kc, key)
+	bytesKey := m.getEncodedKeyBuffer(m.prefix, key)
+	defer m.encodedKeyPool.Put(bytesKey)
+	err := EncodeKeyWithPrefixInto(m.prefix, m.kc, key, bytesKey)
 	if err != nil {
 		return false, err
 	}
@@ -108,7 +132,9 @@ func (m Map[K, V]) Has(ctx context.Context, key K) (bool, error) {
 // Errors with ErrEncoding if key encoding fails.
 // If the key does not exist then this is a no-op.
 func (m Map[K, V]) Remove(ctx context.Context, key K) error {
-	bytesKey, err := EncodeKeyWithPrefix(m.prefix, m.kc, key)
+	bytesKey := m.getEncodedKeyBuffer(m.prefix, key)
+	defer m.encodedKeyPool.Put(bytesKey)
+	err := EncodeKeyWithPrefixInto(m.prefix, m.kc, key, bytesKey)
 	if err != nil {
 		return err
 	}
@@ -265,4 +291,15 @@ func EncodeKeyWithPrefix[K any](prefix []byte, kc codec.KeyCodec[K], key K) ([]b
 		return nil, fmt.Errorf("%w: key encode: %s", ErrEncoding, err) // TODO: use multi err wrapping in go1.20: https://github.com/golang/go/issues/53435
 	}
 	return keyBytes, nil
+}
+
+func EncodeKeyWithPrefixInto[K any](prefix []byte, kc codec.KeyCodec[K], key K, buf []byte) error {
+	prefixLen := len(prefix)
+
+	copy(buf, prefix)
+	_, err := kc.Encode(buf[prefixLen:], key)
+	if err != nil {
+		return fmt.Errorf("%w: key encode: %s", ErrEncoding, err) // TODO: use multi err wrapping in go1.20: https://github.com/golang/go/issues/53435
+	}
+	return nil
 }
