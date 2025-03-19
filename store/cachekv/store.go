@@ -32,6 +32,10 @@ type Store struct {
 	parent        types.KVStore
 }
 
+type PooledStore struct {
+	Store
+}
+
 var _ types.CacheKVStore = (*Store)(nil)
 
 // NewStore creates a new Store object
@@ -42,6 +46,37 @@ func NewStore(parent types.KVStore) *Store {
 		sortedCache:   internal.NewBTree(),
 		parent:        parent,
 	}
+}
+
+var storePool = sync.Pool{
+	New: func() any {
+		return &PooledStore{
+			Store: Store{
+				cache:         make(map[string]*cValue),
+				unsortedCache: make(map[string]struct{}),
+				sortedCache:   internal.NewBTree(),
+			},
+		}
+	},
+}
+
+func (store *PooledStore) Release() {
+	// clear cache map
+	for key := range store.cache {
+		delete(store.cache, key)
+	}
+	for key := range store.unsortedCache {
+		delete(store.unsortedCache, key)
+	}
+	store.sortedCache.Clear()
+	store.parent = nil
+	storePool.Put(store)
+}
+
+func NewPooledStore(parent types.KVStore) *PooledStore {
+	store := storePool.Get().(*PooledStore)
+	store.parent = parent
+	return store
 }
 
 // GetStoreType implements Store.
