@@ -200,4 +200,4 @@ retract (
 	v0.43.0
 )
 
-replace cosmossdk.io/store => github.com/hyphacoop/cosmos-sdk/store v0.0.0-20250319173536-ee10bbbed7d6
+replace cosmossdk.io/store => github.com/hyphacoop/cosmos-sdk/store v0.0.0-20250403203946-6be951df82c3
