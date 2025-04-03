@@ -51,6 +51,11 @@ func (m Map[K, V]) GetPrefix() []byte {
 	return m.prefix
 }
 
+type pooledKVStore interface {
+	store.KVStore
+	Release()
+}
+
 // Set maps the provided value to the provided key in the store.
 // Errors with ErrEncoding if key or value encoding fails.
 func (m Map[K, V]) Set(ctx context.Context, key K, value V) error {
@@ -65,6 +70,9 @@ func (m Map[K, V]) Set(ctx context.Context, key K, value V) error {
 	}
 
 	kvStore := m.sa(ctx)
+	if pooledKVStore, ok := kvStore.(pooledKVStore); ok {
+		defer pooledKVStore.Release()
+	}
 	return kvStore.Set(bytesKey, valueBytes)
 }
 
@@ -78,6 +86,9 @@ func (m Map[K, V]) Get(ctx context.Context, key K) (v V, err error) {
 	}
 
 	kvStore := m.sa(ctx)
+	if pooledKVStore, ok := kvStore.(pooledKVStore); ok {
+		defer pooledKVStore.Release()
+	}
 	valueBytes, err := kvStore.Get(bytesKey)
 	if err != nil {
 		return v, err
@@ -101,6 +112,9 @@ func (m Map[K, V]) Has(ctx context.Context, key K) (bool, error) {
 		return false, err
 	}
 	kvStore := m.sa(ctx)
+	if pooledKVStore, ok := kvStore.(pooledKVStore); ok {
+		defer pooledKVStore.Release()
+	}
 	return kvStore.Has(bytesKey)
 }
 
@@ -113,6 +127,9 @@ func (m Map[K, V]) Remove(ctx context.Context, key K) error {
 		return err
 	}
 	kvStore := m.sa(ctx)
+	if pooledKVStore, ok := kvStore.(pooledKVStore); ok {
+		defer pooledKVStore.Release()
+	}
 	return kvStore.Delete(bytesKey)
 }
 
