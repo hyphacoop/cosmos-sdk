@@ -2,11 +2,13 @@ package gaskv
 
 import (
 	"io"
+	"sync"
 
 	"cosmossdk.io/store/types"
 )
 
 var _ types.KVStore = &Store{}
+var _ types.PooledStore = &PooledStore{}
 
 // Store applies gas tracking to an underlying KVStore. It implements the
 // KVStore interface.
@@ -24,6 +26,31 @@ func NewStore(parent types.KVStore, gasMeter types.GasMeter, gasConfig types.Gas
 		parent:    parent,
 	}
 	return kvs
+}
+
+type PooledStore struct {
+	Store
+}
+
+var storePool = sync.Pool{
+	New: func() any {
+		return &PooledStore{}
+	},
+}
+
+func NewPooledStore(parent types.KVStore, gasMeter types.GasMeter, gasConfig types.GasConfig) *PooledStore {
+	store := storePool.Get().(*PooledStore)
+	store.parent = parent
+	store.gasMeter = gasMeter
+	store.gasConfig = gasConfig
+	return store
+}
+
+func (store *PooledStore) Release() {
+	store.parent = nil
+	store.gasMeter = nil
+	store.gasConfig = types.GasConfig{}
+	storePool.Put(store)
 }
 
 // Implements Store.

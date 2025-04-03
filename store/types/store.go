@@ -160,9 +160,14 @@ type CacheMultiStore interface {
 	Write() // Writes operations to underlying KVStore
 }
 
+type PooledStore interface {
+	Store
+	Release()
+}
+
 type PooledCacheMultiStore interface {
 	CacheMultiStore
-	Release() // Releases the cache
+	PooledStore
 }
 
 // CommitMultiStore is an interface for a MultiStore without cache capabilities.
