@@ -60,6 +60,12 @@ var storePool = sync.Pool{
 	},
 }
 
+var valPool = sync.Pool{
+	New: func() any {
+		return &cValue{}
+	},
+}
+
 func (store *PooledStore) Release() {
 	store.resetCaches()
 	store.parent = nil
@@ -133,7 +139,12 @@ func (store *Store) resetCaches() {
 		// Clear the cache using the map clearing idiom
 		// and not allocating fresh objects.
 		// Please see https://bencher.orijtech.com/perfclinic/mapclearing/
-		for key := range store.cache {
+		for key, val := range store.cache {
+			if !val.dirty {
+				val.value = nil
+				val.dirty = false
+				valPool.Put(val)
+			}
 			delete(store.cache, key)
 		}
 		for key := range store.unsortedCache {
@@ -158,11 +169,17 @@ func (store *Store) Write() {
 		val *cValue
 	}
 
-	// We need a copy of all of the keys.
+	dirtyValues := 0
+	for _, dbValue := range store.cache {
+		if dbValue.dirty {
+			dirtyValues++
+		}
+	}
+
+	// We need a copy of all of the dirty keys.
 	// Not the best. To reduce RAM pressure, we copy the values as well
 	// and clear out the old caches right after the copy.
-	sortedCache := make([]cEntry, 0, len(store.cache))
-
+	sortedCache := make([]cEntry, 0, dirtyValues)
 	for key, dbValue := range store.cache {
 		if dbValue.dirty {
 			sortedCache = append(sortedCache, cEntry{key, dbValue})
@@ -186,6 +203,9 @@ func (store *Store) Write() {
 		} else {
 			store.parent.Delete([]byte(obj.key))
 		}
+		obj.val.value = nil
+		obj.val.dirty = false
+		valPool.Put(obj.val)
 	}
 }
 
@@ -426,10 +446,17 @@ func (store *Store) clearUnsortedCacheSubset(unsorted []*kv.Pair, sortState sort
 // A `nil` value means a deletion.
 func (store *Store) setCacheValue(key, value []byte, dirty bool) {
 	keyStr := conv.UnsafeBytesToStr(key)
-	store.cache[keyStr] = &cValue{
-		value: value,
-		dirty: dirty,
+	cValue := valPool.Get().(*cValue)
+	cValue.value = value
+	cValue.dirty = dirty
+
+	if prev := store.cache[keyStr]; prev != nil {
+		prev.value = nil
+		prev.dirty = false
+		valPool.Put(prev)
 	}
+
+	store.cache[keyStr] = cValue
 	if dirty {
 		store.unsortedCache[keyStr] = struct{}{}
 	}
