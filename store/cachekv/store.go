@@ -18,15 +18,15 @@ import (
 
 // cValue represents a cached value.
 // If dirty is true, it indicates the cached value is different from the underlying value.
-type cValue struct {
-	value []byte
-	dirty bool
-}
+// type cValue struct {
+// 	value []byte
+// 	dirty bool
+// }
 
 // Store wraps an in-memory cache around an underlying types.KVStore.
 type Store struct {
 	mtx           sync.Mutex
-	cache         map[string]*cValue
+	cache         map[string][]byte // nil indicates a deletion
 	unsortedCache map[string]struct{}
 	sortedCache   internal.BTree // always ascending sorted
 	parent        types.KVStore
@@ -41,7 +41,7 @@ var _ types.CacheKVStore = (*Store)(nil)
 // NewStore creates a new Store object
 func NewStore(parent types.KVStore) *Store {
 	return &Store{
-		cache:         make(map[string]*cValue),
+		cache:         make(map[string][]byte),
 		unsortedCache: make(map[string]struct{}),
 		sortedCache:   internal.NewBTree(),
 		parent:        parent,
@@ -52,7 +52,7 @@ var storePool = sync.Pool{
 	New: func() any {
 		return &PooledStore{
 			Store: Store{
-				cache:         make(map[string]*cValue),
+				cache:         make(map[string][]byte),
 				unsortedCache: make(map[string]struct{}),
 				sortedCache:   internal.NewBTree(),
 			},
@@ -89,7 +89,7 @@ func (store *Store) Get(key []byte) (value []byte) {
 		value = store.parent.Get(key)
 		store.setCacheValue(key, value, false)
 	} else {
-		value = cacheValue.value
+		value = cacheValue
 	}
 
 	return value
@@ -127,7 +127,7 @@ func (store *Store) resetCaches() {
 		// (e.g. Epoch block, Genesis block, etc). Free the old caches from memory, and let them get re-allocated.
 		// TODO: In a future CacheKV redesign, such linear workloads should get into a different cache instantiation.
 		// 100_000 is arbitrarily chosen as it solved Osmosis' InitGenesis RAM problem.
-		store.cache = make(map[string]*cValue)
+		store.cache = make(map[string][]byte)
 		store.unsortedCache = make(map[string]struct{})
 	} else {
 		// Clear the cache using the map clearing idiom
@@ -153,40 +153,49 @@ func (store *Store) Write() {
 		return
 	}
 
-	type cEntry struct {
-		key string
-		val *cValue
-	}
+	// type cEntry struct {
+	// 	key string
+	// 	val []byte
+	// }
 
 	// We need a copy of all of the keys.
 	// Not the best. To reduce RAM pressure, we copy the values as well
 	// and clear out the old caches right after the copy.
-	sortedCache := make([]cEntry, 0, len(store.cache))
+	// sortedCache := make([]cEntry, 0, len(store.unsortedCache))
 
-	for key, dbValue := range store.cache {
-		if dbValue.dirty {
-			sortedCache = append(sortedCache, cEntry{key, dbValue})
-		}
-	}
-	store.resetCaches()
-	sort.Slice(sortedCache, func(i, j int) bool {
-		return sortedCache[i].key < sortedCache[j].key
-	})
+	// for key := range store.unsortedCache {
+	// 	dbValue := store.cache[key]
+	// 	sortedCache = append(sortedCache, cEntry{key, dbValue})
+	// }
+	// store.resetCaches()
+	// sort.Slice(sortedCache, func(i, j int) bool {
+	// 	return sortedCache[i].key < sortedCache[j].key
+	// })
 
+	// Populate the sortedCache with all dirty items.
+	store.dirtyItems(nil, nil)
 	// TODO: Consider allowing usage of Batch, which would allow the write to
 	// at least happen atomically.
-	for _, obj := range sortedCache {
+	iter, err := store.sortedCache.Iterator(nil, nil)
+	if err != nil {
+		panic(err)
+	}
+	for iter.Valid() {
+		key, val := iter.Key(), iter.Value()
 		// We use []byte(key) instead of conv.UnsafeStrToBytes because we cannot
 		// be sure if the underlying store might do a save with the byteslice or
 		// not. Once we get confirmation that .Delete is guaranteed not to
 		// save the byteslice, then we can assume only a read-only copy is sufficient.
-		if obj.val.value != nil {
+		if val != nil {
 			// It already exists in the parent, hence update it.
-			store.parent.Set([]byte(obj.key), obj.val.value)
+			store.parent.Set(key, val)
 		} else {
-			store.parent.Delete([]byte(obj.key))
+			store.parent.Delete(key)
 		}
+		iter.Next()
 	}
+	iter.Close()
+	store.resetCaches()
 }
 
 // CacheWrap implements CacheWrapper.
@@ -341,7 +350,7 @@ func (store *Store) dirtyItems(start, end []byte) {
 			// dbm.IsKeyInDomain is nil safe and returns true iff key is greater than start
 			if dbm.IsKeyInDomain(conv.UnsafeStrToBytes(key), start, end) {
 				cacheValue := store.cache[key]
-				unsorted = append(unsorted, &kv.Pair{Key: []byte(key), Value: cacheValue.value})
+				unsorted = append(unsorted, &kv.Pair{Key: []byte(key), Value: cacheValue})
 			}
 		}
 		store.clearUnsortedCacheSubset(unsorted, stateUnsorted)
@@ -388,7 +397,7 @@ func (store *Store) dirtyItems(start, end []byte) {
 	for i := startIndex; i <= endIndex; i++ {
 		key := strL[i]
 		cacheValue := store.cache[key]
-		kvL = append(kvL, &kv.Pair{Key: []byte(key), Value: cacheValue.value})
+		kvL = append(kvL, &kv.Pair{Key: []byte(key), Value: cacheValue})
 	}
 
 	// kvL was already sorted so pass it in as is.
@@ -426,10 +435,7 @@ func (store *Store) clearUnsortedCacheSubset(unsorted []*kv.Pair, sortState sort
 // A `nil` value means a deletion.
 func (store *Store) setCacheValue(key, value []byte, dirty bool) {
 	keyStr := conv.UnsafeBytesToStr(key)
-	store.cache[keyStr] = &cValue{
-		value: value,
-		dirty: dirty,
-	}
+	store.cache[keyStr] = value
 	if dirty {
 		store.unsortedCache[keyStr] = struct{}{}
 	}
