@@ -154,12 +154,19 @@ type MultiStore interface {
 	LatestVersion() int64
 }
 
-// From MultiStore.CacheMultiStore()....
+// PoolingMultiStore is a MultiStore that can return CacheMultiStores from a pool, without needing to allocate a new one each time.
+type PoolingMultiStore interface {
+	MultiStore
+	CacheMultiStorePooled() PooledCacheMultiStore
+}
+
+// CacheMultiStore extends MultiStore with a Write() method.
 type CacheMultiStore interface {
 	MultiStore
 	Write() // Writes operations to underlying KVStore
 }
 
+// PooledCacheMultiStore is a CacheMultiStore that can be pooled and reused without the overhead of allocation.
 type PooledCacheMultiStore interface {
 	CacheMultiStore
 	Release() // Releases the cache
